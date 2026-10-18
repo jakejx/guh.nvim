@@ -695,14 +695,26 @@ function M.show_repo(focus, repo)
   })
 end
 
---- Implements "mark as read". Updates the `b:guh.notifications` map; does NOT refresh `guh://status`.
+--- Implements "mark as read". On the status page, acts on the notification at the cursor.
 function M.set_read()
   local buf = vim.api.nvim_get_current_buf()
-  local feat, id, repo = util.require_b_guh({ 'feat', 'id', 'repo' })
+  local feat = util.require_b_guh({ 'feat' })
   if not feat then
     return
   end
-  local slug = ('%s#%s'):format(repo, id)
+  local slug
+  if feat == 'status' then
+    slug = vim.api.nvim_get_current_line():match('^%s+(%S+#%d+)%s')
+    if not slug then
+      return util.msg('No notification on this line', vim.log.levels.WARN)
+    end
+  else
+    local id, repo = util.require_b_guh({ 'id', 'repo' })
+    if not id then
+      return
+    end
+    slug = ('%s#%s'):format(repo, id)
+  end
   local status_buf = state.get_buf('status', nil, 'all', false)
   local notifs = status_buf and state.get_b_key(status_buf, { 'guh', 'notifications' })
   local notif = notifs and notifs[slug]
@@ -715,8 +727,22 @@ function M.set_read()
       return done('failed', err)
     end
     done('success')
-    state.set_b_key(assert(status_buf), { 'guh', 'notifications', slug }, vim.NIL)
-    state.update_info(buf)
+    if status_buf and vim.api.nvim_buf_is_valid(status_buf) then
+      state.set_b_key(status_buf, { 'guh', 'notifications', slug }, vim.NIL)
+      if feat == 'status' then
+        local lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
+        for i, line in ipairs(lines) do
+          if line:match('^%s+(%S+#%d+)%s') == slug then
+            table.remove(lines, i)
+            util.buf_set_readonly_lines(status_buf, lines, '')
+            break
+          end
+        end
+      end
+    end
+    if vim.api.nvim_buf_is_valid(buf) then
+      state.update_info(buf)
+    end
   end)
 end
 

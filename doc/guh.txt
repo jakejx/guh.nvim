@@ -138,8 +138,9 @@ cM      Merge PR. |guh-merge|
 cR      Review PR (Approve / Comment / Request-changes / Toggle draft).
         <Plug>(guh-review)
 
-cV      Mark the current PR/issue as "Read". Depends on your "guh://status"
-        notifications. Note:
+cV      Mark the current PR/issue as "Read". On "guh://status", mark the
+        notification on the current line as "Read" and remove its row.
+        Depends on your "guh://status" notifications. Note:
         - Guh never marks anything as "Read" unless you invoke this.
         - Cannot be undone; GitHub has no "Mark as Unread" API.
         <Plug>(guh-notif-read)

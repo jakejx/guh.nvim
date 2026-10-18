@@ -31,6 +31,75 @@ before_each(function()
   end, test_cwd)
 end)
 
+describe('guh.pr notifications', function()
+  it('cV marks the status row read without changing other notifications', function()
+    n.exec_lua(function()
+      local state = require('guh.state')
+      local util = require('guh.util')
+      local gh = require('guh.gh')
+      local pr = require('guh.pr')
+      local buf = state.init_buf('status', false, nil, 'all')
+      local slug = 'owner/repo#123'
+      local other = 'owner/repo#456'
+      local lines = { 'Notifications (unread):', '  ' .. slug .. '  First', '  ' .. other .. '  Second', '' }
+      state.set_b_key(buf, { 'guh', 'notifications' }, {
+        [slug] = { thread_id = 'thread-123', is_pr = true },
+        [other] = { thread_id = 'thread-456', is_pr = false },
+      })
+      util.buf_set_readonly_lines(buf, lines, '')
+      local callback
+      local calls = 0
+      local result
+      util.progress = function()
+        return function(status)
+          result = status
+        end
+      end
+      gh.set_notif_read = function(thread_id, cb)
+        assert(thread_id == 'thread-123')
+        calls = calls + 1
+        callback = cb
+      end
+      -- Headers and blank lines must not make API requests.
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })
+      pr.set_read()
+      vim.api.nvim_win_set_cursor(0, { 4, 0 })
+      pr.set_read()
+      assert(calls == 0)
+
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+      pr.set_read()
+      -- Moving the cursor before the API responds must not remove a different row.
+      vim.api.nvim_win_set_cursor(0, { 3, 0 })
+      callback(false, 'test failure')
+      assert(result == 'failed')
+      assert(vim.deep_equal(lines, vim.api.nvim_buf_get_lines(buf, 0, -1, false)))
+      assert(vim.b[buf].guh.notifications[slug])
+
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+      pr.set_read()
+      vim.api.nvim_win_set_cursor(0, { 3, 0 })
+      callback(true)
+      assert(result == 'success')
+      assert(calls == 2)
+      assert(vim.b[buf].guh.notifications[slug] == nil)
+      assert(vim.b[buf].guh.notifications[other].thread_id == 'thread-456')
+      assert(vim.deep_equal({ lines[1], lines[3], lines[4] }, vim.api.nvim_buf_get_lines(buf, 0, -1, false)))
+      assert(vim.bo[buf].readonly and not vim.bo[buf].modifiable)
+
+      -- Existing PR/issue behavior stays buffer-relative.
+      local issue = state.init_buf('issue', false, 'owner/repo', 456)
+      gh.set_notif_read = function(thread_id, cb)
+        assert(thread_id == 'thread-456')
+        cb(true)
+      end
+      pr.set_read()
+      assert(vim.b[buf].guh.notifications[other] == nil)
+      assert(vim.b[issue].guh.unread == '')
+    end)
+  end)
+end)
+
 describe('guh.gh', function()
   it('get_pr_data', function()
     n.exec_lua(function()
