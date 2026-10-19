@@ -407,11 +407,11 @@ function M.update_info(buf)
       b.n_resolved = pr.n_resolved or 0
       b.show_resolved = pr.show_resolved or false
     end
-  elseif feat == 'prlogs' and pr then
+  elseif feat == 'prlogs' and (b.ci_jobs or pr) then
     -- `b:guh.id` is the PR number; the job's `databaseId` is the trailing bufname segment. Reuse the
     -- shared `status`/`title` slots: CI icon as `status`, job name as `title`.
     local dbid = tonumber((b.bufkey or ''):match('/(%d+)$'))
-    for _, j in ipairs(pr.ci_jobs or {}) do
+    for _, j in ipairs(b.ci_jobs or pr.ci_jobs or {}) do
       if j.databaseId == dbid then
         b.status = gh.ci_icon(j)
         b.title = j.name
