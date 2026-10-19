@@ -277,6 +277,7 @@ Review PRs: approve, request changes, or reject                   *guh-review*
 
 To confirm the "review" action, Guh presents a `guh://…/review/<id>` buffer.
 Write-and-close to confirm the "review" action. |guh-confirm|
+Approvals may have an empty body; comments and change requests require text.
 
 ==============================================================================
 COMMANDS                                                        *guh-commands*

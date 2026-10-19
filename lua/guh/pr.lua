@@ -463,9 +463,7 @@ function M.review_pr()
   local function do_action(label)
     local gh_action = label:lower()
     local heading = ('%s PR #%s'):format(label, id)
-    -- Prefill ":+1:" in the Approve body, so the user can Approve without writing a comment. #64
-    local content = label == 'Approve' and { ':+1:' } or { '' }
-    comments.edit_comment('review', id, content, { title = heading }, function(input)
+    comments.edit_comment('review', id, { '' }, { title = heading, allow_empty = gh_action == 'approve' }, function(input)
       local body = vim.trim(input)
       local done = util.progress(('%s…'):format(heading))
       gh.review_pr(id, repo, gh_action, body, function(ok, stderr)
