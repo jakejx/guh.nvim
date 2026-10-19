@@ -841,13 +841,13 @@ end
 
 --- Opens a markdown buffer prefilled with `content`.
 --- - Write-and-close (fugitive-style) confirms the action (invokes `on_confirm`);
---- - Close-without-write or write-empty-buffer aborts the action (shows a message, skips `on_confirm`).
+--- - Close-without-write aborts the action; write-empty-buffer also aborts unless `info.allow_empty` is set.
 ---
 --- @param feat 'comment'|'merge'|'review' kind of edit; each has its own per-PR buffer.
 --- @param prnum integer
 --- @param content string[] lines to prefill the buffer with
---- @param info? { title?: string, title_hl?: string, hint?: string } Used for 'winbar'.
---- @param on_confirm fun(input?: string) Called with the text on write-and-close, or nil on abort (ZQ, or empty buffer).
+--- @param info? { title?: string, title_hl?: string, hint?: string, allow_empty?: boolean } Title metadata and confirmation options.
+--- @param on_confirm fun(input?: string) Called with the text on write-and-close, or nil on abort (ZQ, or empty buffer unless allowed).
 function M.edit_comment(feat, prnum, content, info, on_confirm)
   local repo = assert((vim.b.guh or {}).repo, 'edit_comment: not in a guh:// buffer (no b:guh.repo)')
   if not state.try_show(feat, repo, prnum) then
@@ -881,7 +881,7 @@ function M.edit_comment(feat, prnum, content, info, on_confirm)
       local input = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), '\n')
       vim.bo[buf].modified = false
       vim.schedule(function()
-        if vim.trim(input) == '' then
+        if vim.trim(input) == '' and not info.allow_empty then
           util.msg('aborted (empty buffer)')
           return on_confirm(nil)
         end
