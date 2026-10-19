@@ -25,6 +25,8 @@
 --- @field feat? Feat Feature name
 --- @field id? integer|string PR or issue number, or commit SHA.
 --- @field jobs? integer[] In-flight jobs for the current `run_cmds` run.
+--- @field ci_sha? string Commit context for CI log navigation (instead of a PR).
+--- @field ci_jobs? CIJob[] Jobs for commit-scoped log navigation.
 --- @field notifications? table<string, Notification> Unread notifications on `guh://status` (keyed by slug).
 --- @field pr_data? PullRequest
 --- @field repo? string "owner/name"

@@ -72,7 +72,7 @@ local function resolve_pr(opts, optional)
     not optional
     and not id
     and b_guh
-    and (b_guh.feat == 'issue' or b_guh.feat == 'status' or b_guh.feat == 'repo')
+    and (b_guh.feat == 'issue' or b_guh.feat == 'status' or b_guh.feat == 'repo' or b_guh.ci_sha)
   then
     error('guh: Not a PR', 0)
   end
@@ -299,10 +299,13 @@ end
 --- @param job CIJob From `pr_data.ci_jobs`.
 --- @param pr_id integer
 --- @param repo string "owner/name"
-local function show_ci_log(job, pr_id, repo)
-  -- Key the bufname by `job.databaseId` to disambiguate (multiple logs per PR).
-  -- XXX: store pr-id in `b:guh.id` for refresh/actions.
-  local buf = state.init_buf('prlogs', true, repo, job.databaseId, { id = pr_id })
+local function show_ci_log(job, pr_id, repo, sha, jobs)
+  -- Logs are keyed by job ID; their navigation context can be a PR or a commit.
+  local buf = state.init_buf('prlogs', true, repo, job.databaseId, {
+    id = pr_id or sha,
+    ci_sha = sha or vim.NIL,
+    ci_jobs = jobs or vim.NIL,
+  })
   state.update_info(buf)
   util.set_default_keymaps(buf)
   if not util.buf_empty(buf) then
@@ -324,7 +327,9 @@ local function preload_ci_logs(pr_id, repo, ci_jobs, limit)
   local top = {}
   for i = 1, limit do
     -- Touch the prlogs/ buf so its key exists in `state.bufs`.
-    state.init_buf('prlogs', nil, repo, ci_jobs[i].databaseId, { id = pr_id })
+    if not state.get_buf('prlogs', repo, ci_jobs[i].databaseId, false) then
+      state.init_buf('prlogs', nil, repo, ci_jobs[i].databaseId, { id = pr_id })
+    end
     if ci_jobs[i].conclusion then
       table.insert(top, ci_jobs[i])
     end
@@ -374,12 +379,18 @@ end
 --- Navigates to the next/previous CI job's logs, relative to the current `prlogs/…` buffer.
 --- @param delta integer # +1 for next, -1 for previous.
 local function show_next_ci_job(delta)
-  local _, id, repo = require_pr()
   local b = vim.b.guh or {}
+  local id, repo
+  if b.ci_sha then
+    repo = b.repo
+  else
+    local _, resolved_id, resolved_repo = require_pr()
+    id, repo = resolved_id, resolved_repo
+  end
   -- Get the databaseId from the `…/prlogs/<databaseId>` bufname.
   local job_id = tonumber(b.bufkey and b.bufkey:match('/(%d+)$'))
 
-  with_ci_jobs(id, repo, function(jobs)
+  local function navigate(jobs)
     local cur_idx
     for i, j in ipairs(jobs) do
       if j.databaseId == job_id then
@@ -391,8 +402,13 @@ local function show_next_ci_job(delta)
     if idx < 1 or idx > #jobs then
       return util.msg(('No %s CI job'):format(delta > 0 and 'next' or 'previous'))
     end
-    show_ci_log(jobs[idx], id, repo)
-  end)
+    show_ci_log(jobs[idx], id, repo, b.ci_sha, b.ci_jobs)
+  end
+  if b.ci_sha then
+    navigate(b.ci_jobs or {})
+  else
+    with_ci_jobs(id, repo, navigate)
+  end
 end
 
 --- Navigates to the next/previous "thing":
@@ -402,10 +418,10 @@ end
 ---
 --- @param delta integer # +1 for next, -1 for previous.
 function M.show_next(delta)
-  local feat, id, repo, commit_idx = require_pr()
-  if feat == 'prlogs' then
+  if (vim.b.guh or {}).feat == 'prlogs' then
     return show_next_ci_job(delta)
   end
+  local _, id, repo, commit_idx = require_pr()
 
   local pr_data = state.get_pr_data(repo, id)
   local commits = pr_data and pr_data.commits
@@ -502,6 +518,10 @@ function M.refresh(target)
   local b = vim.b.guh or {}
   local id = target.id or b.id
   local repo = target.repo or b.repo
+  if feat == 'prlogs' and b.ci_sha then
+    -- Job logs are immutable; refresh the commit's job list instead.
+    return M.ci_logs_pick()
+  end
 
   -- Clear the cached `b:guh` state (if any), to force a reload.
   -- PR sub-views (prdiff/prcomments/prlogs) cache on the pr/ buf; status/repo key by "all".
@@ -601,7 +621,9 @@ end
 --- Implements `<Plug>(guh-up)` ("-"): navigates to the "parent" of a `guh://` buffer.
 function M.go_up()
   local b = vim.b.guh or {}
-  if b.feat == 'pr' or b.feat == 'issue' then
+  if b.feat == 'prlogs' and b.ci_sha then
+    M.show_commit(b.ci_sha, b.repo, true)
+  elseif b.feat == 'pr' or b.feat == 'issue' then
     M.show_repo(true, b.repo)
   elseif b.feat == 'prdiff' or b.feat == 'prcomments' or b.feat == 'prlogs' or b.feat == 'file' then
     M.show_pr(assert(vim._tointeger(b.id)), b.repo, true)
@@ -1242,19 +1264,75 @@ end
 
 --- Shows a menu of most-recent CI logs for each (matrix-expanded) job type.
 function M.ci_logs_pick(opts)
-  local _, id, repo = require_pr(opts)
-  with_ci_jobs(id, repo, function(jobs)
+  local b = vim.b.guh or {}
+  local sha = not opts and (b.ci_sha or (b.feat == 'commit' and b.id)) or nil
+  local home_pr
+  if not opts and b.feat == 'repo' then
+    local line = vim.api.nvim_get_current_line()
+    local number = line:match('^%s+#(%d+)%s')
+    if number then
+      -- PRs and issues both use #number rows; inspect the enclosing section.
+      local row = vim.api.nvim_win_get_cursor(0)[1]
+      local lines = vim.api.nvim_buf_get_lines(0, 0, row - 1, false)
+      for i = #lines, 1, -1 do
+        local heading = vim.trim(lines[i])
+        if heading:match('^Open PRs') or heading == 'Current branch'
+          or heading == 'Created by you' or heading == 'Requesting a code review from you' then
+          home_pr = tonumber(number)
+          break
+        elseif heading:match('^Open issues') then
+          break
+        end
+      end
+    end
+    -- Match the commit column, not arbitrary hex words in the commit message.
+    sha = line:match('^%s+([%da-fA-F]+)%s%s')
+    if not home_pr and (not sha or #sha < 7 or #sha > 40) then
+      return util.msg('Place the cursor on a commit or PR row', vim.log.levels.WARN)
+    end
+  end
+  local id, repo
+  if not opts and b.feat == 'status' then
+    local slug = vim.api.nvim_get_current_line():match('^%s+(%S+#%d+)%s')
+    local notif = slug and (b.notifications or {})[slug]
+    if not notif or not notif.is_pr then
+      return util.msg('Place the cursor on a PR notification row', vim.log.levels.WARN)
+    end
+    local number
+    repo, number = slug:match('^([^#]+)#(%d+)$')
+    id = tonumber(number)
+  elseif home_pr then
+    id, repo = home_pr, b.repo
+  elseif sha then
+    repo = b.repo
+  else
+    local _, resolved_id, resolved_repo = require_pr(opts)
+    id, repo = resolved_id, resolved_repo
+  end
+  local function pick(jobs)
     vim.ui.select(jobs, {
-      prompt = ('CI jobs for PR #%s'):format(id),
+      prompt = sha and ('CI jobs for commit %s'):format(sha:sub(1, 12)) or ('CI jobs for PR #%s'):format(id),
       format_item = function(j)
         return ('%s %s'):format(gh.ci_icon(j), j.name)
       end,
     }, function(picked)
       if picked then
-        show_ci_log(picked, id, repo)
+        show_ci_log(picked, id, repo, sha, sha and jobs or nil)
       end
     end)
-  end)
+  end
+  if sha then
+    gh.get_commit_ci_jobs(sha, repo, function(jobs, err)
+      if not jobs then
+        return util.msg(err or 'Failed to fetch commit CI', vim.log.levels.ERROR)
+      elseif #jobs == 0 then
+        return util.msg(('No (non-skipped) CI jobs for commit %s'):format(sha), vim.log.levels.WARN)
+      end
+      pick(jobs)
+    end)
+  else
+    with_ci_jobs(id, repo, pick)
+  end
 end
 
 return M

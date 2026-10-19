@@ -892,6 +892,193 @@ describe('util', function()
   end)
 end)
 
+describe('guh status CI', function()
+  it('opens home-page PR rows without treating issue rows as PRs', function()
+    n.exec_lua(function()
+      local state = require('guh.state')
+      local util = require('guh.util')
+      local gh = require('guh.gh')
+      local pr = require('guh.pr')
+      local buf = state.init_buf('repo', false, 'o/r', 'all')
+      util.buf_set_readonly_lines(buf, {
+        'Open PRs (last-updated):',
+        '  #42    PR title',
+        'Open issues (last-updated):',
+        '  #43    Issue title',
+        'Created by you',
+        '  #44    Another PR',
+      }, '')
+      local calls = 0
+      gh.get_pr_data = function(id, repo, _, cb)
+        assert(repo == 'o/r' and (id == 42 or id == 44))
+        calls = calls + 1
+        cb({ ci_jobs = { { databaseId = id, name = 'test', conclusion = 'success' } } })
+      end
+      vim.ui.select = function(jobs, opts)
+        assert(#jobs == 1 and opts.prompt:match('CI jobs for PR #'))
+      end
+      util.msg = function() end
+      for _, row in ipairs({ 1, 3, 4 }) do
+        vim.api.nvim_win_set_cursor(0, { row, 0 })
+        pr.ci_logs_pick()
+      end
+      assert(calls == 0)
+      for _, row in ipairs({ 2, 6 }) do
+        vim.api.nvim_win_set_cursor(0, { row, 15 })
+        pr.ci_logs_pick()
+      end
+      assert(calls == 2)
+    end)
+  end)
+
+  it('opens the PR notification under the cursor, ignoring issues and headers', function()
+    n.exec_lua(function()
+      local state = require('guh.state')
+      local util = require('guh.util')
+      local gh = require('guh.gh')
+      local pr = require('guh.pr')
+      local buf = state.init_buf('status', false, nil, 'all')
+      state.set_b_key(buf, { 'guh', 'notifications' }, {
+        ['other/repo#42'] = { thread_id = '1', is_pr = true },
+        ['other/repo#43'] = { thread_id = '2', is_pr = false },
+      })
+      util.buf_set_readonly_lines(buf, {
+        'Notifications (unread):',
+        '  other/repo#42  PR title',
+        '  other/repo#43  Issue title',
+        '',
+      }, '')
+      local calls = 0
+      local callback
+      gh.get_pr_data = function(id, repo, _, cb)
+        assert(id == 42 and repo == 'other/repo')
+        calls = calls + 1
+        callback = cb
+      end
+      gh.get_pr_ci_log = function(id, repo, cb)
+        assert(id == 321 and repo == 'other/repo')
+        cb('PR log')
+      end
+      vim.ui.select = function(jobs, opts, cb)
+        assert(opts.prompt == 'CI jobs for PR #42')
+        cb(jobs[1])
+      end
+      util.msg = function() end
+      for _, row in ipairs({ 1, 3, 4 }) do
+        vim.api.nvim_win_set_cursor(0, { row, 0 })
+        pr.ci_logs_pick()
+      end
+      assert(calls == 0)
+      vim.api.nvim_win_set_cursor(0, { 2, 20 })
+      pr.ci_logs_pick()
+      assert(calls == 1)
+      -- Resolve the original row even if the cursor moves while fetching.
+      vim.api.nvim_win_set_cursor(0, { 3, 0 })
+      callback({ ci_jobs = { { databaseId = 321, name = 'test', conclusion = 'success' } } })
+      assert(vim.b.guh.feat == 'prlogs' and vim.b.guh.id == 42)
+      assert(vim.b.guh.repo == 'other/repo' and not vim.b.guh.ci_sha)
+    end)
+  end)
+end)
+
+describe('guh commit CI', function()
+  it('fetches paginated commit checks and reports missing commits/errors', function()
+    n.exec_lua(function()
+      local gh = require('guh.gh')
+      local util = require('guh.util')
+      local calls = 0
+      util.system = function(cmd, _, cb)
+        calls = calls + 1
+        assert(vim.list_contains(cmd, 'sha=abcdef123456'))
+        if calls == 2 then
+          assert(vim.list_contains(cmd, 'cursor=next'))
+        end
+        cb({ code = 0, stdout = vim.json.encode({ data = { repository = { object = {
+          oid = string.rep('a', 40),
+          statusCheckRollup = { contexts = {
+            pageInfo = { hasNextPage = calls == 1, endCursor = 'next' },
+            nodes = { {
+              __typename = 'CheckRun', name = 'test', conclusion = 'FAILURE',
+              startedAt = tostring(calls),
+              detailsUrl = 'https://github.com/o/r/actions/runs/1/job/' .. calls,
+              checkSuite = { app = { slug = 'github-actions' }, workflowRun = { workflow = { name = 'CI' } } },
+            } },
+          } },
+        } } } }) })
+      end
+      local result
+      gh.get_commit_ci_jobs('abcdef123456', 'o/r', function(jobs)
+        result = jobs
+      end)
+      assert(calls == 2 and #result == 1 and result[1].databaseId == 2)
+      assert(result[1].name == 'CI: test' and result[1].conclusion == 'failure')
+      util.system = function(_, _, cb)
+        cb({ code = 0, stdout = '{"data":{"repository":{"object":null}}}' })
+      end
+      gh.get_commit_ci_jobs('missing', 'o/r', function(jobs, err)
+        assert(not jobs and err:match('Commit not found'))
+      end)
+      util.system = function(_, _, cb)
+        cb({ code = 0, stdout = '{"errors":[{"message":"denied"}]}' })
+      end
+      gh.get_commit_ci_jobs('missing', 'o/r', function(jobs, err)
+        assert(not jobs and err:match('denied'))
+      end)
+    end)
+  end)
+
+  it('opens home-row logs without a PR and supports navigation and parent', function()
+    n.exec_lua(function()
+      local state = require('guh.state')
+      local util = require('guh.util')
+      local gh = require('guh.gh')
+      local pr = require('guh.pr')
+      local repo = state.init_buf('repo', false, 'o/r', 'all')
+      util.buf_set_readonly_lines(repo, { 'Commits:', '  abcdef123456  Some commit message' }, '')
+      local jobs = {
+        { databaseId = 101, name = 'CI: test', conclusion = 'failure', url = 'https://github.com/o/r/actions/runs/1/job/101' },
+        { databaseId = 102, name = 'CI: lint', conclusion = 'success' },
+      }
+      local calls = 0
+      gh.get_commit_ci_jobs = function(sha, r, cb)
+        assert(sha == 'abcdef123456' and r == 'o/r')
+        calls = calls + 1
+        cb(jobs)
+      end
+      gh.get_pr_ci_log = function(_, _, cb)
+        cb('test log')
+      end
+      vim.ui.select = function(items, opts, cb)
+        assert(opts.prompt:match('commit abcdef123456'))
+        cb(items[1])
+      end
+      util.msg = function() end
+      pr.ci_logs_pick() -- Header must not fetch.
+      assert(calls == 0)
+      vim.api.nvim_win_set_cursor(0, { 2, 30 }) -- Anywhere on the row.
+      pr.ci_logs_pick()
+      assert(calls == 1 and vim.b.guh.feat == 'prlogs')
+      assert(vim.b.guh.ci_sha == 'abcdef123456' and vim.b.guh.title == 'CI: test')
+      assert(gh.get_url(0) == 'https://github.com/o/r/actions/runs/1/job/101')
+      pr.show_next(1)
+      assert(vim.b.guh.title == 'CI: lint')
+      pr.show_next(-1)
+      assert(vim.b.guh.title == 'CI: test')
+      pr.refresh()
+      assert(calls == 2)
+      pr.show_commit = function(sha, r, focus)
+        assert(sha == 'abcdef123456' and r == 'o/r' and focus)
+        calls = calls + 1
+      end
+      pr.go_up()
+      assert(calls == 3)
+      state.init_buf('commit', false, 'o/r', 'abcdef123456', { id = 'abcdef123456' })
+      pr.ci_logs_pick()
+      assert(calls == 4)
+    end)
+  end)
+end)
+
 describe('guh.state', function()
   -- TODO: https://github.com/neovim/neovim/issues/40159
   it('set_b_key patches a nested key-path, preserving siblings', function()

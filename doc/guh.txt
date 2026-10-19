@@ -105,6 +105,9 @@ dd      View PR diff + comments. |guh-diff|
         <Plug>(guh-diff)
 
 dl      View the most-recent CI logs for all job-names in the CI matrix.
+        On a status page PR notification row, view that PR's CI jobs.
+        On a repo home page commit or PR row, view its CI jobs.
+        Also works in commit buffers, without needing an associated PR.
         <Plug>(guh-logs)
 
 ]f      View the next/newer "thing".

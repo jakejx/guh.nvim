@@ -65,6 +65,14 @@ function M.get_url(buf)
     return ('%s/issues/%s'):format(base, b.id)
   elseif b.feat == 'commit' then
     return ('%s/commit/%s'):format(base, b.id)
+  elseif b.feat == 'prlogs' and b.ci_sha then
+    local job_id = tonumber((b.bufkey or ''):match('/(%d+)$'))
+    for _, job in ipairs(b.ci_jobs or {}) do
+      if job.databaseId == job_id and job.url then
+        return job.url
+      end
+    end
+    return ('%s/commit/%s'):format(base, b.ci_sha)
   elseif b.feat == 'prdiff' then
     return ('%s/pull/%s/changes'):format(base, b.id)
   elseif b.feat == 'pr' or b.feat == 'prcomments' or b.feat == 'prlogs' or b.feat == 'file' then
@@ -192,9 +200,7 @@ end
 --- Dedupes by name ("workflow: job-name", latest `startedAt`), drops `skipped`, sorts by (status, name).
 ---
 --- @return CIJob[]
-local function to_ci_jobs(node)
-  local rollup_commits = vim.tbl_get(node, 'headCommit', 'nodes') or {}
-  local contexts = vim.tbl_get(rollup_commits[1] or {}, 'commit', 'statusCheckRollup', 'contexts', 'nodes') or {}
+local function ci_jobs_from_contexts(contexts)
   local by_name = {}
   for _, cr in ipairs(contexts) do
     -- Only `CheckRun` from the `github-actions` app has a fetchable workflow log.
@@ -236,6 +242,69 @@ local function to_ci_jobs(node)
     return (a.name or '') < (b.name or '')
   end)
   return jobs
+end
+
+local function to_ci_jobs(node)
+  local commits = vim.tbl_get(node, 'headCommit', 'nodes') or {}
+  return ci_jobs_from_contexts(vim.tbl_get(commits[1] or {}, 'commit', 'statusCheckRollup', 'contexts', 'nodes') or {})
+end
+
+--- Fetches GitHub Actions jobs for a commit (including abbreviated SHAs).
+--- @param sha string
+--- @param repo string
+--- @param on_result fun(jobs?: CIJob[], err?: string)
+function M.get_commit_ci_jobs(sha, repo, on_result)
+  local owner, name = repo:match('^([^/]+)/(.+)$')
+  if not owner then
+    return on_result(nil, 'Invalid repository: ' .. repo)
+  end
+  local query = [[
+    query($owner:String!,$name:String!,$sha:String!,$cursor:String){
+      repository(owner:$owner,name:$name){
+        object(expression:$sha){ ... on Commit{
+          oid
+          statusCheckRollup{ contexts(first:100,after:$cursor){
+            pageInfo{ hasNextPage endCursor }
+            nodes{ __typename ... on CheckRun{
+              name conclusion status startedAt detailsUrl
+              checkSuite{ app{ slug } workflowRun{ workflow{ name } } }
+            } }
+          } }
+        } }
+      }
+    }
+  ]]
+  local contexts = {}
+  local function fetch(cursor)
+    local cmd = {
+      'gh', 'api', 'graphql',
+      '-F', 'owner=' .. owner,
+      '-F', 'name=' .. name,
+      '-F', 'sha=' .. sha,
+      '-f', 'query=' .. query,
+    }
+    if cursor then
+      vim.list_extend(cmd, { '-F', 'cursor=' .. cursor })
+    end
+    util.system(cmd, nil, function(r)
+      local resp = parse_or_default(r.stdout or '', {})
+      if r.code ~= 0 or resp.errors then
+        local err = resp.errors and vim.inspect(resp.errors) or vim.trim(r.stderr or '')
+        return on_result(nil, ('Failed to fetch commit CI: %s'):format(err))
+      end
+      local commit = vim.tbl_get(resp, 'data', 'repository', 'object')
+      if not commit or not commit.oid then
+        return on_result(nil, 'Commit not found: ' .. sha)
+      end
+      local page = vim.tbl_get(commit, 'statusCheckRollup', 'contexts') or {}
+      vim.list_extend(contexts, page.nodes or {})
+      if page.pageInfo and page.pageInfo.hasNextPage then
+        return fetch(page.pageInfo.endCursor)
+      end
+      on_result(ci_jobs_from_contexts(contexts))
+    end)
+  end
+  fetch()
 end
 
 --- Builds a PR object from a `get_pr_data` result (GraphQL: `pullRequest`).
