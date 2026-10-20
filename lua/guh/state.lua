@@ -360,6 +360,8 @@ function M.set_buf_name(buf, feat, key)
   end
 end
 
+local unread_ns = vim.api.nvim_create_namespace('guh.unread')
+
 --- True if the PR/issue slug is in the (status buffer's) unread `notifications` map.
 ---
 --- @param repo string "owner/name"
@@ -384,7 +386,18 @@ function M.update_info(buf)
   local pr = b.pr_data or M.get_pr_data(b.repo, b.id)
   local feat = b.feat
 
-  if feat == 'pr' or feat == 'issue' or feat == 'prdiff' or feat == 'prcomments' then
+  if feat == 'repo' then
+    vim.api.nvim_buf_clear_namespace(buf, unread_ns, 0, -1)
+    for row, line in ipairs(vim.api.nvim_buf_get_lines(buf, 0, -1, false)) do
+      local id = line:match('^%s*#(%d+)%s')
+      if id and has_unread(b.repo, id) then
+        vim.api.nvim_buf_set_extmark(buf, unread_ns, row - 1, 0, {
+          virt_text = { { ' ● Unread', 'DiagnosticInfo' } },
+          virt_text_pos = 'eol',
+        })
+      end
+    end
+  elseif feat == 'pr' or feat == 'issue' or feat == 'prdiff' or feat == 'prcomments' then
     b.unread = has_unread(b.repo, b.id) and 'Unread' or ''
     if pr then
       local label = gh.pr_state_label(pr)

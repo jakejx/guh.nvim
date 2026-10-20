@@ -722,7 +722,30 @@ function M.show_repo(focus, repo)
       tmpl,
     },
     { 'gh', 'pr', 'status', '--repo', repo },
-  })
+    function(_, _, on_stderr, on_exit)
+      -- Fetch alongside the repo commands, even if the status page was never opened.
+      local status_buf = state.init_buf('status', nil, nil, 'all')
+      util.set_default_keymaps(status_buf)
+      gh.get_user_notifs(status_buf, function(lines, err)
+        if lines and vim.api.nvim_buf_is_valid(status_buf) then
+          util.buf_set_readonly_lines(status_buf, lines, '')
+          for _, loaded in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.b[loaded].guh then
+              state.update_info(loaded)
+            end
+          end
+        elseif err then
+          util.msg('Unread indicators unavailable: ' .. err, vim.log.levels.WARN)
+          if on_stderr then
+            on_stderr(nil, { err })
+          end
+        end
+        on_exit()
+      end)
+    end,
+  }, function()
+    state.update_info(buf)
+  end)
 end
 
 --- Implements "mark as read". On the status page, acts on the notification at the cursor.
@@ -772,6 +795,11 @@ function M.set_read()
     end
     if vim.api.nvim_buf_is_valid(buf) then
       state.update_info(buf)
+    end
+    local repo = slug:match('^(.-)#%d+$')
+    local repo_buf = state.get_buf('repo', repo, 'all', false)
+    if repo_buf then
+      state.update_info(repo_buf)
     end
   end)
 end

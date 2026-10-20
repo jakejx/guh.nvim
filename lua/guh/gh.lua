@@ -660,10 +660,18 @@ end
 --- @param buf integer The `guh://status` buffer.
 --- @param on_done fun(lines?: string[], err?: string)
 function M.get_user_notifs(buf, on_done)
-  gh_api('get_user_notifs', 'GET', 'notifications', {}, function(r)
-    if r.errors then
+  util.system({ 'gh', 'api', '--paginate', '--slurp', 'notifications' }, nil, function(result)
+    local pages = parse_or_default(result.stdout, { errors = {} })
+    local r = pages.errors and pages or {}
+    if not pages.errors then
+      for _, page in ipairs(pages) do
+        vim.list_extend(r, page)
+      end
+    end
+    if result.code ~= 0 or r.errors then
       local errs = util.gh_errors(r)
-      return on_done(nil, #errs > 0 and table.concat(errs, '; ') or 'Failed to fetch notifications')
+      local err = #errs > 0 and table.concat(errs, '; ') or vim.trim(result.stderr or '')
+      return on_done(nil, err ~= '' and err or 'Failed to fetch notifications')
     end
     local map = vim.empty_dict() ---@type table<string, Notification> slug ("owner/repo#NNN") => Notification.
     local groups = {} ---@type table<string, string[]> repo => display lines (in original/chronological order).
