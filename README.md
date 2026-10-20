@@ -46,6 +46,9 @@ Run `:Guh <target>` to view a PR/issue/commit/repo.
 :Guh .
 ```
 
+Repo overview PR rows show a highlighted `● Unread` when GitHub has an unread notification
+for that PR. Notifications load automatically with the overview; hit `R` to refresh them.
+
 Inside any `guh://` buffer,
 
 - Hit `g?` to see the keymaps.
