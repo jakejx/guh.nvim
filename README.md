@@ -59,6 +59,8 @@ When viewing a PR,
   (3) loaded in quickfix.
 - Files marked as "Viewed" are collapsed to a `(viewed) <path>` line.
 - You can view the most-recent CI logs for all "jobs" in the CI matrix.
+- Hit `gr` to start a pending review. New diff threads stay pending until `cR` submits
+  the review; replies and top-level comments are still posted immediately.
 
 Editable buffers (comments, merge message) confirm the action on write-and-close (`ZZ` submits, `ZQ`
 discards).

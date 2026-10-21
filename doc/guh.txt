@@ -138,7 +138,13 @@ cI      Rerun CI jobs. Opens a picker (or use `[count]cI` to skip):
 cM      Merge PR. |guh-merge|
         <Plug>(guh-merge)
 
+gr      Start a PR review (or reuse your existing pending review).
+        New diff threads remain pending until submitted with cR.
+        Replies and top-level comments are still posted immediately.
+        <Plug>(guh-start-review)
+
 cR      Review PR (Approve / Comment / Request-changes / Toggle draft).
+        Submits your pending review, if one exists.
         <Plug>(guh-review)
 
 cV      Mark the current PR/issue as "Read". On "guh://status", mark the

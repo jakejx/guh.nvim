@@ -537,8 +537,120 @@ local function gh_api(logname, method, endpoint, fields, cb)
   util.log(logname .. ' request', request)
   util.system(request, nil, function(r)
     local resp = parse_or_default(r.stdout, { errors = {} })
+    if r.code ~= 0 and not resp.errors then
+      resp.errors = { { message = resp.message or vim.trim(r.stderr or '') } }
+    end
     util.log(logname .. ' resp', resp)
     cb(resp)
+  end)
+end
+
+-- Pending review support adapted from gcanat's justinmk/guh.nvim#92.
+
+--- Fetches fresh review state instead of relying on the truncated/cached reviews list.
+--- @param id integer
+--- @param repo string
+--- @param cb fun(pr_id?: string, review_id?: string, err?: string)
+function M.get_review_context(id, repo, cb)
+  local owner, name = repo:match('^([^/]+)/([^/]+)$')
+  local user = M.get_user()
+  if not owner or not user then
+    return cb(nil, nil, 'Unable to resolve repository or active GitHub user')
+  end
+  local query = [[
+    query($owner: String!, $name: String!, $number: Int!, $author: String!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          id
+          reviews(first: 1, states: [PENDING], author: $author) { nodes { id } }
+        }
+      }
+    }
+  ]]
+  gh_api('review_context', 'POST', 'graphql', {
+    { '-f', 'query=' .. query },
+    { '-f', 'owner=' .. owner },
+    { '-f', 'name=' .. name },
+    { '-F', 'number=' .. id },
+    { '-f', 'author=' .. user },
+  }, function(resp)
+    local pr = vim.tbl_get(resp, 'data', 'repository', 'pullRequest')
+    if resp.errors or not pr or pr == vim.NIL then
+      local errors = table.concat(util.gh_errors(resp), '; ')
+      return cb(nil, nil, errors ~= '' and errors or 'Unable to fetch PR review state')
+    end
+    local review = vim.tbl_get(pr, 'reviews', 'nodes', 1)
+    cb(pr.id, review and review.id or nil)
+  end)
+end
+
+--- Starts a pending PR review.
+--- @param pr_id string
+--- @param cb fun(resp: table)
+function M.start_review(pr_id, cb)
+  local query = [[
+    mutation($id: ID!) {
+      addPullRequestReview(input: {pullRequestId: $id}) { pullRequestReview { id } }
+    }
+  ]]
+  gh_api('review_start', 'POST', 'graphql', {
+    { '-f', 'query=' .. query },
+    { '-f', 'id=' .. pr_id },
+  }, cb)
+end
+
+--- Adds a thread to an existing pending review (never publishes it immediately).
+--- @param review_id string
+--- @param cb fun(resp: table)
+function M.new_review_comment(review_id, body, path, start_line, line, side, cb)
+  local query = [[
+    mutation($review: ID!, $body: String!, $path: String!, $line: Int!, $side: DiffSide!, $startLine: Int, $startSide: DiffSide) {
+      addPullRequestReviewThread(input: {
+        pullRequestReviewId: $review, body: $body, path: $path, line: $line,
+        side: $side, startLine: $startLine, startSide: $startSide
+      }) { thread { id } }
+    }
+  ]]
+  local fields = {
+    { '-f', 'query=' .. query },
+    { '-f', 'review=' .. review_id },
+    { '-f', 'body=' .. body },
+    { '-f', 'path=' .. path },
+    { '-F', 'line=' .. line },
+    { '-f', 'side=' .. (side or 'RIGHT') },
+  }
+  if start_line ~= line then
+    table.insert(fields, { '-F', 'startLine=' .. start_line })
+    table.insert(fields, { '-f', 'startSide=' .. (side or 'RIGHT') })
+  end
+  gh_api('post_review_comment', 'POST', 'graphql', fields, cb)
+end
+
+--- Submits an existing pending review. Accepts the same actions as review_pr().
+--- @param body? string
+--- @param cb fun(ok: boolean, err?: string)
+function M.review_pending_pr(review_id, action, body, cb)
+  vim.validate('action', action, function(a)
+    return a == 'approve' or a == 'request-changes' or a == 'comment'
+  end, "'approve'|'request-changes'|'comment'")
+  local query = [[
+    mutation($id: ID!, $event: PullRequestReviewEvent!, $body: String) {
+      submitPullRequestReview(input: {pullRequestReviewId: $id, event: $event, body: $body}) {
+        pullRequestReview { id }
+      }
+    }
+  ]]
+  local fields = {
+    { '-f', 'query=' .. query },
+    { '-f', 'id=' .. review_id },
+    { '-f', 'event=' .. action:upper():gsub('-', '_') },
+  }
+  if body and body ~= '' then
+    table.insert(fields, { '-f', 'body=' .. body })
+  end
+  gh_api('submit_pending_review', 'POST', 'graphql', fields, function(resp)
+    local review = vim.tbl_get(resp, 'data', 'submitPullRequestReview', 'pullRequestReview')
+    cb(not resp.errors and review ~= nil and review ~= vim.NIL, table.concat(util.gh_errors(resp), '; '))
   end)
 end
 
