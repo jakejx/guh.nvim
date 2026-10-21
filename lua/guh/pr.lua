@@ -487,11 +487,20 @@ function M.review_pr()
       return
     end
     local done = util.progress(('%s…'):format(heading))
-    local ok, stderr = async.await(5, gh.review_pr, id, repo, gh_action, vim.trim(input))
+    local _, review_id, err = async.await(3, gh.get_review_context, id, repo)
+    if err then
+      return done('failed', err)
+    end
+    local ok, stderr
+    if review_id then
+      ok, stderr = async.await(5, gh.review_pending_pr, review_id, gh_action, vim.trim(input))
+    else
+      ok, stderr = async.await(5, gh.review_pr, id, repo, gh_action, vim.trim(input))
+    end
     if ok then
       done('success')
     else
-      done('failed', vim.trim(stderr))
+      done('failed', vim.trim(stderr or ''))
     end
   end
 
@@ -1070,12 +1079,21 @@ local function new_comment(pr_id, repo, line1, line2)
       return
     end
     local progress = util.new_progress_report('Sending comment...', vim.api.nvim_get_current_buf())
-    local resp = async.await(8, gh.new_comment, pr, input, info.file, info.start_line, info.end_line, info.side, repo)
-    if resp['errors'] == nil then
-      progress('success', nil, 'Comment sent.')
+    local _, review_id, err = async.await(3, gh.get_review_context, pr_id, repo)
+    if err then
+      return progress('failed', nil, err)
+    end
+    local resp
+    if review_id then
+      resp = async.await(7, gh.new_review_comment, review_id, input, info.file, info.start_line, info.end_line, info.side)
+    else
+      resp = async.await(8, gh.new_comment, pr, input, info.file, info.start_line, info.end_line, info.side, repo)
+    end
+    if resp.errors == nil then
+      progress('success', nil, review_id and 'Pending review comment saved.' or 'Comment sent.')
       M.refresh({ feat = 'pr', id = pr_id, repo = repo })
     else
-      progress('failed', nil, 'Failed to send comment.')
+      progress('failed', nil, 'Failed to send comment: ' .. table.concat(util.gh_errors(resp), '; '))
     end
   end)
 end
@@ -1131,6 +1149,27 @@ function M.comment(args)
   end
 
   new_comment(id, repo, args.line1, args.line2)
+end
+
+--- Starts a review; subsequent new diff threads stay pending until cR submits it.
+function M.start_review()
+  local _, id, repo = require_pr()
+  local done = util.progress(('Starting review for PR #%s…'):format(id))
+  gh.get_review_context(id, repo, function(pr_id, review_id, err)
+    if err then
+      return done('failed', err)
+    elseif review_id then
+      return done('success', 'A pending review already exists.')
+    end
+    gh.start_review(pr_id, function(resp)
+      local review = vim.tbl_get(resp, 'data', 'addPullRequestReview', 'pullRequestReview')
+      if resp.errors or not review or review == vim.NIL then
+        done('failed', table.concat(util.gh_errors(resp), '; '))
+      else
+        done('success')
+      end
+    end)
+  end)
 end
 
 --- Runs `gh pr edit <id>` (or `gh issue edit <id>`) in a :terminal.
