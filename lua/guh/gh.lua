@@ -216,6 +216,8 @@ local function ci_jobs_from_contexts(contexts)
         by_name[name] = {
           databaseId = job_id,
           runId = run_id,
+          workflowId = vim.tbl_get(cr, 'checkSuite', 'workflowRun', 'workflow', 'databaseId'),
+          workflowName = workflow,
           name = name,
           -- Mimic the REST API which returns lowercase ("success", "failure", …).
           conclusion = cr.conclusion and cr.conclusion:lower() or nil,
@@ -264,7 +266,7 @@ function M.get_commit_ci_jobs(sha, repo, on_result)
             pageInfo{ hasNextPage endCursor }
             nodes{ __typename ... on CheckRun{
               name conclusion status startedAt detailsUrl
-              checkSuite{ app{ slug } workflowRun{ workflow{ name } } }
+              checkSuite{ app{ slug } workflowRun{ workflow{ databaseId name } } }
             } }
           } }
         } }
@@ -450,7 +452,7 @@ function M.get_pr_data(prnum, repo, opts, on_result)
                     __typename
                     ... on CheckRun{
                       databaseId name conclusion status startedAt detailsUrl
-                      checkSuite{ app{ slug } workflowRun{ workflow{ name } } }
+                      checkSuite{ app{ slug } workflowRun{ workflow{ databaseId name } } }
                     }
                   }
                 }

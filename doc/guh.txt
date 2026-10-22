@@ -31,6 +31,83 @@ Install: >lua
 <
 
 ==============================================================================
+LUA API                                                             *guh-api*
+
+get_context()                                               *guh.get_context()*
+    require('guh').get_context()
+
+Returns a detached snapshot of the current Guh buffer and cursor context, or
+nil outside a Guh buffer. Synchronous and local-only: no GitHub requests, buffer
+creation, navigation, messages, or pickers. Missing/unknown information is nil.
+Returned tables can be modified without changing Guh's cached data.
+
+Example external action (not part of Guh's action logic): >lua
+  vim.keymap.set('n', '<leader>gx', function()
+    local ctx = require('guh').get_context()
+    if ctx then
+      my_action(ctx)
+    end
+  end)
+<
+Common fields:
+  bufnr, feat       Buffer number and Guh buffer type.
+  row, col          Cursor buffer row (1-based), byte column (0-based).
+  repo              Repository slug ("owner/name").
+  number            PR/issue number, even if its kind isn't known locally.
+  pr_number         PR number, only when its kind is known.
+  issue_number      Issue number, only when its kind is known.
+  sha, branch       Commit SHA or branch reference.
+  pr                Cached contextual PR data, when loaded.
+  base_sha, head_sha, base_branch, head_branch
+                    Contextual PR's base/head information (not cursor targets).
+
+File/diff/review fields:
+  path              File path, with any outdated/outside prefix stripped.
+  line, side        GitHub file line and LEFT/RIGHT side, when known.
+  old_line, new_line
+                    Diff coordinates; file/hunk headers have neither.
+  quasi             "outdated" or "outside" for synthetic review sections.
+  comments          Comments anchored to the current diff line, or the exact
+                    rendered comment at cursor in a prcomments buffer. Manual
+                    edits invalidate rendered comment identities until refresh.
+  comment           Present only when exactly one rendered/anchored comment is
+                    identified. comment_id also recognizes explicit GitHub
+                    #discussion_rID / #issuecomment-ID URL anchors.
+  thread_id, thread_node_id
+                    Present only when the comments share a single review thread.
+
+Actions/notification fields:
+  job_id, run_id    Current log's Actions job and workflow run IDs.
+  workflow_id       Numeric workflow ID; a workflow URL may provide a filename
+                    instead. Not inferred from the run ID.
+  workflow_name     Current log's workflow name, if available.
+  job               Cached current log job (including name, URL, status).
+  notification_id   Notification thread ID, distinct from a review thread ID.
+
+Resolution:
+- Buffer identities are retained. On a commit hash in a PR, ctx contains repo,
+  pr_number, and sha together. Cached PR commits expand abbreviated hashes.
+- Repo list rows and notification rows resolve even with the cursor on the
+  title. PR/issue kind comes from the section, notifications, or loaded buffers;
+  unknown references expose number without guessing a kind.
+- target contains the explicit cursor reference (GitHub/Guh URL, #number,
+  owner/repo#number, SHA, branch, Actions run/job/workflow URL), or list row.
+  Cursor references take precedence over implicit row targets. Whitespace is
+  not an explicit reference. A global status-page link sets target.status=true.
+- Target fields fill missing top-level fields only for the same repository
+  (or when there is no enclosing repository), and never mix different PR/issue
+  numbers. Existing identities are never overwritten. For a link to a different PR/commit/repository, inspect target
+  to distinguish that reference from the enclosing buffer's identity.
+- Commit buffers expose an enclosing PR only if exactly one cached PR in the
+  same repository contains that commit. No association is guessed/fetched.
+- File buffers expose their stored commit/path and cursor file line. Commit
+  patches and PR diffs expose file/hunk coordinates. Only comments actually
+  anchored to a diff line are returned, not an unrelated preceding thread.
+- Editing buffers retain their parent PR/issue kind. Raw issue/CLI terminal
+  output has no structured comment IDs; only known parent and explicit cursor
+  references are available. Data still loading may be absent.
+
+==============================================================================
 WORKFLOW                                                           *guh-usage*
 
 Guh does not provide a setup() function. Instead it defines a plugin/guh.lua

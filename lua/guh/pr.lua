@@ -323,6 +323,7 @@ local function show_ci_log(job, pr_id, repo, sha, jobs)
     id = pr_id or sha,
     ci_sha = sha or vim.NIL,
     ci_jobs = jobs or vim.NIL,
+    ci_job = job,
   })
   state.update_info(buf)
   util.set_default_keymaps(buf)
@@ -346,7 +347,7 @@ local function preload_ci_logs(pr_id, repo, ci_jobs, limit)
   for i = 1, limit do
     -- Touch the prlogs/ buf so its key exists in `state.bufs`.
     if not state.get_buf('prlogs', repo, ci_jobs[i].databaseId, false) then
-      state.init_buf('prlogs', nil, repo, ci_jobs[i].databaseId, { id = pr_id })
+      state.init_buf('prlogs', nil, repo, ci_jobs[i].databaseId, { id = pr_id, ci_job = ci_jobs[i] })
     end
     if ci_jobs[i].conclusion then
       table.insert(top, ci_jobs[i])
@@ -1204,7 +1205,7 @@ end
 function M.edit_pr()
   local feat, id, repo = resolve_pr()
   local kind = feat == 'issue' and 'issue' or 'pr'
-  local buf = state.init_buf('edit', true, repo, id)
+  local buf = state.init_buf('edit', true, repo, id, { subject_kind = kind })
   local cmd = gh.cmd(repo, kind, 'edit', tostring(id))
   vim.api.nvim_open_tabpage(buf, true, {})
   util.set_default_keymaps(buf)

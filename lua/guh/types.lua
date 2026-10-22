@@ -20,6 +20,44 @@
 --- @field is_pr boolean Lets `pr.select` skip its PR-vs-issue probe.
 --- @field is_read? boolean Marked read this session (via "cV"). Kept in the map so `guh://status` can dim it.
 
+--- @class GuhContextTarget
+--- @field repo? string "owner/name".
+--- @field status? boolean True for an explicit global status-page target.
+--- @field number? integer PR/issue number, even when its kind is unknown.
+--- @field pr_number? integer Only set when known to be a PR.
+--- @field issue_number? integer Only set when known to be an issue.
+--- @field sha? string Commit SHA (expanded from cached PR commits when possible).
+--- @field branch? string Branch reference.
+--- @field run_id? integer Actions workflow run ID.
+--- @field job_id? integer Actions job ID.
+--- @field workflow_id? integer|string Numeric workflow ID, or workflow filename from a URL.
+--- @field notification_id? string Notification thread ID (not a review-thread ID).
+--- @field comment_id? integer Comment ID, including explicit GitHub comment URL anchors.
+--- @field workflow_name? string Cached workflow name for a referenced log.
+--- @field job? CIJob Cached job for a referenced log.
+
+--- @class GuhContext: GuhContextTarget
+--- @field bufnr integer Current buffer number.
+--- @field feat Feat Current Guh buffer type.
+--- @field row integer Cursor buffer row (1-based).
+--- @field col integer Cursor byte column (0-based).
+--- @field target? GuhContextTarget Cursor/row target, independent of enclosing identities.
+--- @field pr? PullRequest Cached contextual PR data.
+--- @field base_sha? string
+--- @field head_sha? string
+--- @field base_branch? string
+--- @field head_branch? string
+--- @field path? string File path (without outdated/outside synthetic prefixes).
+--- @field quasi? 'outdated'|'outside'
+--- @field line? integer GitHub file line, not buffer row.
+--- @field old_line? integer Old-side diff line.
+--- @field new_line? integer New-side diff line.
+--- @field side? 'LEFT'|'RIGHT'
+--- @field comments? Comment[] Review comments anchored to the diff line, or the rendered comment at cursor.
+--- @field comment? Comment Only when exactly one comment is identified.
+--- @field thread_id? integer Only when comments belong to a single review thread.
+--- @field thread_node_id? string GraphQL review-thread ID.
+
 --- @class BufState
 --- Buffer-local b:guh dict.
 --- @field chan? integer  Marks a `run_cmds` buf as "loaded". Channel-id (term=true) or a synthetic id (plain buffer).
@@ -28,6 +66,11 @@
 --- @field jobs? integer[] In-flight jobs for the current `run_cmds` run.
 --- @field ci_sha? string Commit context for CI log navigation (instead of a PR).
 --- @field ci_jobs? CIJob[] Jobs for commit-scoped log navigation.
+--- @field ci_job? CIJob Immutable job context for this log buffer.
+--- @field bufkey? string Canonical repository/id buffer key.
+--- @field subject_kind? 'pr'|'issue' Parent entity of an edit/comment buffer.
+--- @field comment_rows? table<string, Comment> Rendered comment-buffer row to comment.
+--- @field comment_rows_tick? integer Changedtick at rendering; manual edits invalidate row identities.
 --- @field notifications? table<string, Notification> Unread notifications on `guh://status` (keyed by slug).
 --- @field pr_data? PullRequest
 --- @field repo? string "owner/name"
@@ -98,6 +141,8 @@
 --- @field databaseId integer Workflow job id (parsed from `detailsUrl`), feeds `gh.get_pr_ci_logs`.
 --- @field name string "workflow: job-name" (e.g. "CI: build (ubuntu)"), or just the job-name if no workflow.
 --- @field runId integer Workflow run id (parsed from `detailsUrl`), feeds `gh run rerun`.
+--- @field workflowId? integer Workflow database ID.
+--- @field workflowName? string Workflow name, without the job name.
 --- @field startedAt? string
 --- @field status? string lowercase: "completed", "in_progress", "queued", …
 --- @field url? string Web URL of the job (`detailsUrl`).
