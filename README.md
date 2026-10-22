@@ -73,6 +73,24 @@ Keymaps are provided as `<Plug>(guh-…)`. To customize, just define a mapping t
 
 See [help file](./doc/guh.txt) for details.
 
+## Context API
+
+Use `require('guh').get_context()` from your own keybindings/actions:
+
+```lua
+vim.keymap.set('n', '<leader>gx', function()
+  local ctx = require('guh').get_context()
+  if ctx then
+    my_action(ctx) -- e.g. ctx.repo, ctx.pr_number, ctx.sha, ctx.run_id
+  end
+end)
+```
+
+Returns available buffer and cursor context together, without GitHub requests, or `nil` outside
+Guh. For example, a commit in a PR provides the repository, PR number, and commit SHA. Linked
+references are also available in `ctx.target`, without replacing enclosing identities.
+See `:help guh.get_context()` for fields and resolution rules.
+
 ## Install
 
 ```lua

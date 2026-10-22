@@ -101,6 +101,7 @@ local function to_line_map(diff_lines)
   local file = nil
   local new_line = 0
   local old_line = 0
+  local in_hunk = false
   local line_map = {}
   for i, l in ipairs(diff_lines) do
     -- Derive the path from the `diff --git a/… b/…` header (always present), NOT `+++ b/…`: deleted
@@ -110,12 +111,17 @@ local function to_line_map(diff_lines)
       file = gitfile
       new_line = 0
       old_line = 0
+      in_hunk = false
     end
     local hunk_old, hunk_new = l:match('^@@ %-(%d+),?%d* %+(%d+)')
     if hunk_new then
       old_line = tonumber(hunk_old)
       new_line = tonumber(hunk_new)
-    elseif file then
+      in_hunk = true
+    elseif l:match('^%(viewed%) ') then
+      file = nil
+      in_hunk = false
+    elseif file and in_hunk then
       local c = l:sub(1, 1)
       if c == '+' then
         line_map[i] = { file = file, new_line = new_line, old_line = nil }
@@ -131,6 +137,34 @@ local function to_line_map(diff_lines)
     end
   end
   return line_map
+end
+
+--- Read-only file/line context for a diff row (also works for commit patches).
+--- @param buf integer
+--- @param row integer 1-indexed buffer row.
+--- @return table? { path, old_line?, new_line?, side?, line?, quasi? }
+function M.get_diff_context(buf, row)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, row, false)
+  local path
+  for i = #lines, 1, -1 do
+    path = lines[i]:match(diff_git_pat) or lines[i]:match('^%(viewed%) (.+)$')
+    if path then
+      break
+    end
+  end
+  if not path then
+    return nil
+  end
+  local quasi = path:match('^(outdated)%-%d+:') or path:match('^(outside)%-%d+:')
+  local entry = to_line_map(lines)[row]
+  return {
+    path = path:gsub('^outdated%-%d+:', ''):gsub('^outside%-%d+:', ''),
+    quasi = quasi,
+    old_line = entry and entry.old_line,
+    new_line = entry and entry.new_line,
+    side = entry and (entry.new_line and 'RIGHT' or 'LEFT'),
+    line = entry and (entry.new_line or entry.old_line),
+  }
 end
 
 --- Finds the `diff --git a/… b/…` (or `(viewed) <path>`) filepath heading at or above cursor in
@@ -298,7 +332,7 @@ function M.load_pr_comments(id, repo, diff_buf, pr_data, comments_list)
               table.insert(body, bl)
             end
           end
-          table.insert(comment_blocks, { heading = heading, body = body })
+          table.insert(comment_blocks, { heading = heading, body = body, comment = c })
         end
         entries[start_idx] = comment_blocks
 
@@ -358,6 +392,7 @@ function M.load_pr_comments(id, repo, diff_buf, pr_data, comments_list)
     out[i] = ''
   end
 
+  local comment_rows = {}
   for i, anchor in ipairs(anchors) do
     local comment_blocks = entries[anchor]
     local next_anchor = anchors[i + 1] or (#diff_lines + 1)
@@ -367,20 +402,24 @@ function M.load_pr_comments(id, repo, diff_buf, pr_data, comments_list)
     -- Render: each comment is guaranteed its heading row; bodies fill the remaining vertical space.
     -- So a big comment can't starve the headings of sibling comments anchored to the same diff line.
     local rendered = {}
+    local rendered_comments = {}
     local truncated = false
     if n_comments > max_lines then
       -- Even one row per comment overflows; show as many headings as fit.
       for j = 1, max_lines do
         table.insert(rendered, comment_blocks[j].heading)
+        rendered_comments[#rendered] = comment_blocks[j].comment
       end
       truncated = true
     else
       local body_budget = max_lines - n_comments
       for _, blk in ipairs(comment_blocks) do
         table.insert(rendered, blk.heading)
+        rendered_comments[#rendered] = blk.comment
         for _, bl in ipairs(blk.body) do
           if body_budget > 0 then
             table.insert(rendered, bl)
+            rendered_comments[#rendered] = blk.comment
             body_budget = body_budget - 1
           else
             truncated = true
@@ -394,6 +433,7 @@ function M.load_pr_comments(id, repo, diff_buf, pr_data, comments_list)
     end
     for j, line in ipairs(rendered) do
       out[anchor + j - 1] = line
+      comment_rows[tostring(anchor + j - 1)] = rendered_comments[j]
     end
   end
 
@@ -404,6 +444,8 @@ function M.load_pr_comments(id, repo, diff_buf, pr_data, comments_list)
   end
 
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, out)
+  state.set_b_key(buf, { 'guh', 'comment_rows' }, comment_rows)
+  state.set_b_key(buf, { 'guh', 'comment_rows_tick' }, vim.api.nvim_buf_get_changedtick(buf))
 
   -- vim.bo[buf].modifiable = false
   -- vim.bo[buf].readonly = true
@@ -849,11 +891,14 @@ end
 --- @param info? { title?: string, title_hl?: string, hint?: string, allow_empty?: boolean } Title metadata and confirmation options.
 --- @param on_confirm fun(input?: string) Called with the text on write-and-close, or nil on abort (ZQ, or empty buffer unless allowed).
 function M.edit_comment(feat, prnum, content, info, on_confirm)
-  local repo = assert((vim.b.guh or {}).repo, 'edit_comment: not in a guh:// buffer (no b:guh.repo)')
+  local source = vim.b.guh or {}
+  local repo = assert(source.repo, 'edit_comment: not in a guh:// buffer (no b:guh.repo)')
   if not state.try_show(feat, repo, prnum) then
     vim.cmd [[split]]
   end
-  local buf = state.init_buf(feat, true, repo, prnum)
+  local buf = state.init_buf(feat, true, repo, prnum, {
+    subject_kind = source.subject_kind or (source.feat == 'issue' and 'issue' or 'pr'),
+  })
   vim._with({ buf = buf }, function()
     vim.cmd [[set wrap breakindent nonumber norelativenumber nolist]]
   end)
