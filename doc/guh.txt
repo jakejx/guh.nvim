@@ -334,7 +334,7 @@ See |:GuhComment|.
 ------------------------------------------------------------------------------
 Merging PRs                                                        *guh-merge*
 
-`cM` on a PR view opens a picker:
+`cM` on a PR view, or a PR row in the status/repo view, opens a picker:
 
 1. squash
 2. merge

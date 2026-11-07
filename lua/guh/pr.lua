@@ -558,7 +558,13 @@ end
 
 --- Performs the "merge PR" action. Shows a vim.ui.select picker unless `[count]` was given.
 function M.merge_pr()
-  local _, id, repo = require_pr()
+  local ctx = require('guh.context').get()
+  local opts
+  if ctx and (ctx.feat == 'status' or ctx.feat == 'repo') and ctx.pr_number then
+    opts = { id = ctx.pr_number, repo = ctx.repo }
+  end
+  local _, id, repo = require_pr(opts)
+  util.log('merge_pr.enter', { id = id, repo = repo, count = vim.v.count })
 
   --- @async
   local function do_merge(choice, subject, body)
@@ -632,6 +638,7 @@ function M.merge_pr()
   local count = vim.v.count
   util.run_async(function()
     local choice = choices[count] or util.await_select(choices, { prompt = ('Merge PR #%s:'):format(id) })
+    util.log('merge_pr.choice', { id = id, repo = repo, choice = choice or 'cancelled' })
     if choice then
       with_choice(choice)
     end

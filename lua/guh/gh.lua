@@ -869,7 +869,16 @@ function M.merge_pr(id, repo, method, subject, body, admin, cb)
   if admin then
     table.insert(cmd, '--admin')
   end
+  util.log('merge_pr.command', cmd)
+  local started = vim.uv.hrtime()
   util.system(cmd, nil, function(r)
+    util.log('merge_pr.result', {
+      code = r.code,
+      signal = r.signal,
+      stdout = r.stdout,
+      stderr = r.stderr,
+      dur_ms = math.floor((vim.uv.hrtime() - started) / 1e6),
+    })
     cb(r.code == 0, r.stderr or '')
   end)
 end
