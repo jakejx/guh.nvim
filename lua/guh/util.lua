@@ -55,7 +55,11 @@ end
 --- @return T? item nil if cancelled.
 --- @return integer? idx
 function M.await_select(items, opts)
-  return vim.async.await(3, vim.ui.select, items, opts)
+  return vim.async.await(function(cb)
+    -- UI providers may return a picker with close(), but not the callback-based
+    -- close contract expected by vim.async. Do not expose it as an awaitable.
+    vim.ui.select(items, opts, cb)
+  end)
 end
 
 --- Runs `fn` as a fire-and-forget task. Its unhandled error is raised (see `vim.async.Task:raise_on_error()`).

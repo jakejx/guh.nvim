@@ -101,6 +101,41 @@ describe('guh.pr notifications', function()
   end)
 end)
 
+describe('guh.util await_select', function()
+  it('ignores picker handles and resumes on selection or cancellation', function()
+    n.exec_lua(function()
+      local util = require('guh.util')
+      local original = vim.ui.select
+      local closed = false
+      local callback
+      vim.ui.select = function(_, _, cb)
+        callback = cb
+        return { close = function() closed = true end }
+      end
+      for _, cancel in ipairs { false, true } do
+        local finished = false
+        local task = util.run_async(function()
+          local item, idx = util.await_select({ 'rebase' }, {})
+          assert(item == (not cancel and 'rebase' or nil))
+          assert(idx == (not cancel and 1 or nil))
+          finished = true
+        end)
+        assert(callback)
+        if cancel then
+          callback()
+        else
+          callback('rebase', 1)
+        end
+        assert(vim.wait(1000, function() return finished end))
+        assert(not closed)
+        task:wait()
+        callback = nil
+      end
+      vim.ui.select = original
+    end)
+  end)
+end)
+
 describe('guh.gh', function()
   it('get_pr_data', function()
     n.exec_lua(function()
