@@ -136,6 +136,55 @@ describe('guh.util await_select', function()
   end)
 end)
 
+describe('guh.pr merge', function()
+  it('resolves PR rows through context and rejects issues and headings', function()
+    n.exec_lua(function()
+      local state = require('guh.state')
+      local util = require('guh.util')
+      local pr = require('guh.pr')
+      local buf = state.init_buf('status', false, nil, 'all')
+      state.set_b_key(buf, { 'guh', 'notifications' }, {
+        ['owner/repo#123'] = { thread_id = 'pr', is_pr = true },
+        ['other/repo#456'] = { thread_id = 'issue', is_pr = false },
+      })
+      util.buf_set_readonly_lines(buf, {
+        'Notifications (unread):',
+        '  owner/repo#123  A pull request',
+        '  other/repo#456  An issue',
+        '',
+      }, '')
+      local prompts = {}
+      util.run_async = function(fn)
+        fn()
+      end
+      util.await_select = function(_, opts)
+        prompts[#prompts + 1] = opts.prompt
+        -- Cancel before any GitHub request.
+      end
+      vim.api.nvim_win_set_cursor(0, { 2, 24 })
+      pr.merge_pr()
+      assert(vim.deep_equal(prompts, { 'Merge PR #123:' }))
+      for _, row in ipairs { 1, 3, 4 } do
+        vim.api.nvim_win_set_cursor(0, { row, 0 })
+        local ok, err = pcall(pr.merge_pr)
+        assert(not ok and tostring(err):find('Not a PR', 1, true))
+      end
+      assert(#prompts == 1)
+
+      -- Repo PR rows use the same context resolver.
+      buf = state.init_buf('repo', false, 'owner/repo', 'all')
+      util.buf_set_readonly_lines(buf, { 'Open PRs:', '  #789  Another PR' }, '')
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+      pr.merge_pr()
+      assert(prompts[2] == 'Merge PR #789:')
+
+      state.init_buf('pr', false, 'owner/repo', 321)
+      pr.merge_pr()
+      assert(prompts[3] == 'Merge PR #321:')
+    end)
+  end)
+end)
+
 describe('guh.gh', function()
   it('get_pr_data', function()
     n.exec_lua(function()
