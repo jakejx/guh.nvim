@@ -113,3 +113,4 @@ Requirements:
 
 guh.nvim was originally forked (and completely rewritten) from
 https://github.com/daliusd/ghlite.nvim by Dalius Dobravolskas.
+e2e test
