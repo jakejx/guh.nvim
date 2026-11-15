@@ -1,6 +1,7 @@
 --- The main "app" code. Displays PRs/issues/repo-status.
 
 local comments = require('guh.comments')
+local files = require('guh.files')
 local gh = require('guh.gh')
 local state = require('guh.state')
 local util = require('guh.util')
@@ -1071,20 +1072,158 @@ function M.load_pr(opts, on_done)
   end
 end
 
---- This is only used by "<Plug>(guh-diff)" now...
-function M.show_pr_diff(opts)
+--- Shows the PR diff (+ comments split), then calls `on_done(diff_buf)`.
+---
+--- @param opts? { id?: integer|string, repo?: string }
+--- @param on_done? fun(diff_buf: integer)
+function M.show_pr_diff(opts, on_done)
   local _, id, repo = require_pr(opts)
   local buf = state.init_buf('prdiff', true, repo, id) -- focus=true
 
   -- Fast path: use the cached `b:guh.pr_data`; display without re-fetching.
   local pr_data = state.get_pr_data(repo, id)
   if pr_data and pr_data.n_files and pr_data.n_viewed_threads then
-    return comments.show_pr_comments(id, repo, buf)
+    comments.show_pr_comments(id, repo, buf)
+    return on_done and on_done(buf)
   end
 
   M.load_pr(opts, function(prdiff_buf)
     comments.show_pr_comments(id, repo, prdiff_buf)
+    if on_done then
+      on_done(prdiff_buf)
+    end
   end)
+end
+
+local UNVIEWED_CTX = 'guh-unviewed'
+
+--- The window showing `buf` in the current tabpage, if any.
+--- @param buf integer
+--- @return integer?
+local function diff_win(buf)
+  local win = vim.fn.bufwinid(buf)
+  return win ~= -1 and win or nil
+end
+
+--- Fills the prdiff window's location list with not-yet-"Viewed" files.
+--- @param diff_buf integer
+--- @param pr_data PullRequest
+--- @param action ' '|'r'
+local function set_unviewed_loclist(diff_buf, pr_data, action)
+  local win = diff_win(diff_buf)
+  if not win then
+    return
+  end
+  local list = files.list(pr_data)
+  local headings = files.headings(vim.api.nvim_buf_get_lines(diff_buf, 0, -1, false))
+  local items = files.unviewed_items(list, headings, diff_buf)
+  vim.fn.setloclist(win, {}, action, {
+    title = ('Guh unviewed: %d/%d'):format(#items, #list),
+    items = items,
+    context = UNVIEWED_CTX,
+  })
+end
+
+--- Refreshes the unviewed location list, if one is shown for `diff_buf`.
+--- @param diff_buf integer
+--- @param pr_data PullRequest
+local function update_unviewed_loclist(diff_buf, pr_data)
+  local win = diff_win(diff_buf)
+  if win and vim.fn.getloclist(win, { context = 0 }).context == UNVIEWED_CTX then
+    set_unviewed_loclist(diff_buf, pr_data, 'r')
+  end
+end
+
+--- Implements `<Plug>(guh-unviewed)`: lists not-yet-"Viewed" files in the location list.
+function M.show_unviewed()
+  local _, id, repo = require_pr()
+  M.show_pr_diff({ id = id, repo = repo }, function(diff_buf)
+    set_unviewed_loclist(diff_buf, assert(state.get_pr_data(repo, id)), ' ')
+    vim.api.nvim_win_call(assert(diff_win(diff_buf)), function()
+      vim.cmd.lopen()
+    end)
+  end)
+end
+
+--- Shows the PR diff with the cursor on the heading of `path`.
+---
+--- @param repo string "owner/name"
+--- @param id integer PR number.
+--- @param path string File path in the PR.
+function M.goto_file(repo, id, path)
+  M.show_pr_diff({ id = id, repo = repo }, function(diff_buf)
+    local lnum = files.headings(vim.api.nvim_buf_get_lines(diff_buf, 0, -1, false))[path]
+    if not lnum then
+      return util.msg(('"%s" is not in PR #%s'):format(path, id), vim.log.levels.WARN)
+    end
+    local win = assert(diff_win(diff_buf))
+    vim.api.nvim_set_current_win(win)
+    vim.api.nvim_win_set_cursor(win, { lnum, 0 })
+    vim.cmd('normal! zt')
+  end)
+end
+
+--- Implements `<Plug>(guh-files)`: picks a PR file and jumps to it in the PR diff.
+function M.pick_file()
+  local _, id, repo = require_pr()
+  gh.get_pr_data(id, repo, nil, function(pr_data, err)
+    if not pr_data then
+      return util.msg(err, vim.log.levels.ERROR)
+    end
+    vim.ui.select(files.list(pr_data), {
+      prompt = ('PR #%s files'):format(id),
+      format_item = files.format,
+    }, function(file)
+      if file then
+        M.goto_file(repo, id, file.path)
+      end
+    end)
+  end)
+end
+
+--- Marks `paths` as "Viewed" (or "Unviewed"), then re-renders the PR diff.
+---
+--- @param repo string "owner/name"
+--- @param id integer PR number.
+--- @param paths string[] Current PR file paths.
+--- @param viewed boolean
+--- @param on_done? fun(errors: string[])
+function M.set_viewed(repo, id, paths, viewed, on_done)
+  local pr_data, pr_buf = state.get_pr_data(repo, id)
+  pr_data, pr_buf = assert(pr_data), assert(pr_buf)
+  for _, path in ipairs(paths) do
+    state.set_b_key(pr_buf, { 'guh', 'pr_data', 'viewed', path }, viewed or vim.NIL)
+  end
+  M.load_pr({ id = id, repo = repo }, update_unviewed_loclist)
+
+  local errors, pending = {}, #paths
+  if pending == 0 then
+    return on_done and on_done(errors)
+  end
+  local failed = {}
+  for _, path in ipairs(paths) do
+    gh.set_file_viewed(pr_data.node_id, path, viewed, function(resp)
+      local errs = util.gh_errors(resp)
+      if #errs > 0 then
+        vim.list_extend(errors, errs)
+        failed[#failed + 1] = path
+      end
+      pending = pending - 1
+      if pending > 0 then
+        return
+      end
+      if #failed > 0 then
+        -- Revert the optimistic update for paths GitHub rejected, then re-render.
+        for _, p in ipairs(failed) do
+          state.set_b_key(pr_buf, { 'guh', 'pr_data', 'viewed', p }, (not viewed) or vim.NIL)
+        end
+        M.load_pr({ id = id, repo = repo }, update_unviewed_loclist)
+      end
+      if on_done then
+        on_done(errors)
+      end
+    end)
+  end
 end
 
 --- Posts a file comment on the diff-line at cursor.
@@ -1257,7 +1396,8 @@ function M.toggle_viewed()
   )
 
   -- Re-render from cache.
-  M.load_pr({ id = id, repo = repo }, function()
+  M.load_pr({ id = id, repo = repo }, function(diff_buf, pr)
+    update_unviewed_loclist(diff_buf, pr)
     util.msg(msg)
   end)
   -- Send API request for non-quasi files.

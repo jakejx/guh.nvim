@@ -335,6 +335,8 @@ function M.set_default_keymaps(buf)
   M.map_default(buf, 'n', 'dd', '<Plug>(guh-diff)', 'View the PR diff')
   M.map_default(buf, 'n', 'dz', '<Plug>(guh-resolved)', 'Toggle resolved threads in the PR diff')
   M.map_default(buf, 'n', 'dl', '<Plug>(guh-logs)', 'View the CI logs for this PR')
+  M.map_default(buf, 'n', 'cu', '<Plug>(guh-unviewed)', 'List not-yet-"Viewed" PR files in the location list')
+  M.map_default(buf, 'n', 'gF', '<Plug>(guh-files)', 'Pick a PR file and jump to it in the PR diff')
   M.map_default(buf, 'n', ']f', '<Plug>(guh-next)', 'View the next PR commit / CI job')
   M.map_default(buf, 'n', '[f', '<Plug>(guh-prev)', 'View the previous PR commit / CI job')
 

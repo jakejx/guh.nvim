@@ -191,6 +191,14 @@ dl      View the most-recent CI logs for all job-names in the CI matrix.
         Also works in commit buffers, without needing an associated PR.
         <Plug>(guh-logs)
 
+cu      List the PR files not yet marked "Viewed" in the PR diff window's
+        |location-list| (the title shows the count). Kept up to date by |cv|.
+        <Plug>(guh-unviewed)
+
+gF      Pick a PR file (via |vim.ui.select()|, showing its "Viewed" state)
+        and jump to its heading in the PR diff.
+        <Plug>(guh-files)
+
 ]f      View the next/newer "thing".
         - In a CI logs buffer: next CI job.
         - In a PR-related buffer: next commit (from the most-recent push).
