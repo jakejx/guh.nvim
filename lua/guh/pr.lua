@@ -495,7 +495,7 @@ function M.review_pr()
     end
     local ok, stderr
     if review_id then
-      ok, stderr = async.await(5, gh.review_pending_pr, review_id, gh_action, vim.trim(input))
+      ok, stderr = async.await(4, gh.review_pending_pr, review_id, gh_action, vim.trim(input))
     else
       ok, stderr = async.await(5, gh.review_pr, id, repo, gh_action, vim.trim(input))
     end

@@ -2,10 +2,13 @@
 vim.opt.runtimepath:append(vim.fn.getcwd())
 vim.cmd('runtime plugin/guh.lua')
 local gh = require('guh.gh')
-local pr = require('guh.pr')
 local state = require('guh.state')
 local util = require('guh.util')
 local comments = require('guh.comments')
+-- pr.lua captures edit_comment in an async wrapper when loaded.
+local edit_comment
+comments.edit_comment = function(...) return edit_comment(...) end
+local pr = require('guh.pr')
 
 local request, response, code
 util.system = function(cmd, _, cb)
@@ -81,7 +84,7 @@ pr.start_review()
 assert(not sent and result == 'success', 'starting twice should reuse the pending review')
 
 vim.ui.select = function(_, _, cb) cb('Approve') end
-comments.edit_comment = function(kind, id, _, opts, cb)
+edit_comment = function(kind, id, _, opts, cb)
   assert(kind == 'review' and id == 92 and opts.allow_empty)
   cb('')
 end
@@ -97,13 +100,14 @@ gh.review_pr = function(id, repo, action, body, cb)
   cb(true)
 end
 pr.review_pr()
-assert(sent == 'pending' and result == 'success')
+assert(vim.wait(1000, function() return sent == 'pending' and result == 'success' end))
 pr.review_pr()
-assert(sent == 'single', 'a submitted review must not be reused')
+assert(vim.wait(1000, function() return sent == 'single' end), 'a submitted review must not be reused')
 context_error = 'network error'
-sent = nil
+sent, result = nil, nil
 pr.review_pr()
-assert(not sent and result == 'failed', 'lookup failure must not publish a standalone review')
+assert(vim.wait(1000, function() return result == 'failed' end))
+assert(not sent, 'lookup failure must not publish a standalone review')
 context_error = nil
 
 -- Lookup happens after composing a diff comment, so externally started reviews
@@ -113,7 +117,7 @@ comments.prepare_to_comment = function()
 end
 util.hl_flash = function() end
 util.new_progress_report = util.progress
-comments.edit_comment = function(_, _, _, _, cb) cb('diff comment') end
+edit_comment = function(_, _, _, _, cb) cb('diff comment') end
 gh.get_pr_data = function(_, _, _, cb) cb({ number = 92, headRefOid = 'HEAD' }) end
 pr.refresh = function() end
 gh.new_review_comment = function(review, body, path, first, last, side, cb)
